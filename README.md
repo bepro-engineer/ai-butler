@@ -11,7 +11,7 @@ VPS環境（Ubuntu）での動作・GitHubクローン・環境構成が前提�
 -すべての処理は ChatGPTによる自然言語解析 → GoogleカレンダーAPI操作 によってリアルタイムで行われます
 
 <div align="center">
-  <img src="https://github.com/bepro-engineer/ai-butler$/raw/main/images/ai_butler_screen.png" width="300">
+  <img src="https://github.com/bepro-engineer/ai_butler/blob/main/images/ai_butler_screen.png" width="300">
 </div>
 
 ```plaintext
