@@ -3,5 +3,10 @@ __pycache__/
 *.pyc
 .vscode/
 *.db
-
+token.json
+client_secret.json
+token-bepro.json
+token-geeks.json
+credentials.json
+client_secret.json
 .venv
