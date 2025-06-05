@@ -1,4 +1,5 @@
 import os
+import re
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
@@ -55,8 +56,8 @@ def registerTask(title):
         return f"タスク『{title}』を登録しました。"
 
     except Exception as e:
-        print("❌ タスク登録エラー：", e)
-        return "タスク登録中にエラーが発生しました。"
+        print(f"❌ タスク登録エラー：{e}")
+        return f"タスク登録中にエラーが発生しました。エラー詳細: {e}"
 
 # ✅ タスク一覧を取得し、整形して返す
 def listTasks():
@@ -69,8 +70,6 @@ def listTasks():
 
         results = service.tasks().list(tasklist=tasklist_id, showCompleted=True).execute()
         tasks = results.get("items", [])
-        print("📦 取得タスク数:", len(tasks))
-        print("📦 取得タスク内容:", tasks)
 
         if not tasks:
             return "現在、タスクは登録されていません。"
@@ -81,11 +80,9 @@ def listTasks():
             status = task.get("status", "")
             due_str = task.get("due", None)
 
-            # ✅ フィルタ：完了・空タイトルを除外
             if not title or status != "needsAction":
                 continue
 
-            # ✅ ゾンビ対策：過去すぎるタスクは除外（UI準拠）
             if due_str:
                 try:
                     due = datetime.strptime(due_str[:10], "%Y-%m-%d")
@@ -102,37 +99,8 @@ def listTasks():
         return response
 
     except Exception as e:
-        print("❌ タスク一覧取得エラー：", e)
-        return "タスクの一覧取得中にエラーが発生しました。"
-
-# ✅ 指定タイトルのタスクを「完了」に変更
-def completeTask(title):
-    try:
-        creds = getCredentials()
-        service = build("tasks", "v1", credentials=creds)
-
-        tasklist_id = getDefaultTasklistId(service)
-        results = service.tasks().list(tasklist=tasklist_id).execute()
-        tasks = results.get("items", [])
-
-        for task in tasks:
-            task_title = task.get("title", "").strip()
-            if task_title == title:
-                # ステータス変更 → update
-                task["status"] = "completed"
-                service.tasks().update(
-                    tasklist=tasklist_id,
-                    task=task["id"],
-                    body=task
-                ).execute()
-                print("✅ タスク完了:", title)
-                return f"タスク『{title}』を完了にしました。"
-
-        return f"タスク『{title}』が見つかりませんでした。"
-
-    except Exception as e:
-        print("❌ タスク完了エラー：", e)
-        return "タスク完了中にエラーが発生しました。"
+        print(f"❌ タスク一覧取得エラー：{e}")
+        return f"タスクの一覧取得中にエラーが発生しました。エラー詳細: {e}"
 
 # ✅ 指定タイトルのタスクを削除（先頭一致1件）
 def deleteTask(target_title):
@@ -148,7 +116,8 @@ def deleteTask(target_title):
             title = task.get("title", "").strip()
             task_id = task.get("id")
 
-            if title == target_title:
+            # タイトルが先頭一致するか部分一致で削除対象を判定
+            if title.lower().startswith(target_title.lower()):  # 前方一致を使用
                 service.tasks().delete(tasklist=tasklist_id, task=task_id).execute()
                 print(f"✅ タスク削除成功：{title}")
                 return f"タスク『{title}』を削除しました。"
@@ -166,26 +135,27 @@ def completeTask(target_title):
         service = build("tasks", "v1", credentials=creds)
 
         tasklist_id = getDefaultTasklistId(service)
-        print("📦 使用中のtasklist_id:", tasklist_id)
 
         # 未完了タスクのみ取得（完了済みは対象外）
         results = service.tasks().list(tasklist=tasklist_id, showCompleted=False).execute()
         tasks = results.get("items", [])
 
-        # タイトルが一致するタスクを探して完了に変更
         for task in tasks:
             title = task.get("title", "").strip()
             if title == target_title:
+                if task["status"] == "completed":  # すでに完了していたらスキップ
+                    print(f"⚠️ タスク『{title}』はすでに完了しています。")
+                    return f"タスク『{title}』はすでに完了しています。"
                 task["status"] = "completed"
                 service.tasks().update(tasklist=tasklist_id, task=task["id"], body=task).execute()
                 print(f"✅ 完了マークを付けたタスク: {title}")
                 return f"タスク『{title}』を完了にしました。"
 
         return f"指定されたタスク『{target_title}』は見つかりませんでした。"
-
     except Exception as e:
         print("❌ タスク完了エラー：", e)
         return "タスクの完了処理中にエラーが発生しました。"
+
 
 # ✅ 完了済みタスク一覧を返す関数
 def listCompletedTasks():
@@ -196,6 +166,7 @@ def listCompletedTasks():
         tasklist_id = getDefaultTasklistId(service)
         print("📦 使用中のtasklist_id（完了済み確認）:", tasklist_id)
 
+        # 完了タスクのみ取得（showCompleted=True + statusで絞り込み）
         results = service.tasks().list(
             tasklist=tasklist_id,
             showCompleted=True
@@ -221,44 +192,6 @@ def listCompletedTasks():
     except Exception as e:
         print("❌ 完了済みタスク取得エラー：", e)
         return "完了済みタスク一覧の取得中にエラーが発生しました。"
-
-# ✅ 完了済みタスク一覧を取得して整形して返す
-def listCompletedTasks():
-    try:
-        creds = getCredentials()
-        service = build("tasks", "v1", credentials=creds)
-
-        tasklist_id = getDefaultTasklistId(service)
-        print("📦 使用中のtasklist_id（完了）:", tasklist_id)
-
-        # 完了タスクのみ取得（showCompleted=True + statusで絞り込み）
-        results = service.tasks().list(
-            tasklist=tasklist_id,
-            showCompleted=True,
-            showHidden=True
-        ).execute()
-
-        tasks = results.get("items", [])
-        print("📦 取得タスク数（完了）:", len(tasks))
-
-        completed_tasks = [
-            task for task in tasks if task.get("status") == "completed"
-        ]
-
-        if not completed_tasks:
-            return "現在、完了済みのタスクはありません。"
-
-        response = "✅ 完了済みのタスク一覧です：\n"
-        for task in completed_tasks:
-            title = task.get("title", "").strip()
-            if title:
-                response += f"・{title}\n"
-
-        return response
-
-    except Exception as e:
-        print("❌ 完了済みタスク一覧取得エラー：", e)
-        return "完了済みタスクの一覧取得中にエラーが発生しました。"
 
 # 📌 期限付きタスクを登録する
 def registerTaskWithDue(title, due):
@@ -356,3 +289,5 @@ def listTasksWithDue():
     except Exception as e:
         print("❌ 期限付きタスク一覧取得エラー：", e)
         return "期限付きタスク一覧の取得中にエラーが発生しました。"
+
+        import re

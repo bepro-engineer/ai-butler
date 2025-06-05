@@ -1,4 +1,5 @@
 import os
+import re
 import json
 from datetime import datetime
 from openai import OpenAI
@@ -18,33 +19,58 @@ from logic.task_utils import (
     registerTaskWithDue,
     listTasksWithDue
 )
-# 🚦 detectExplicitType: 「予定」／「タスク」を “登録系の動詞” とセットで書いたときだけ
-#   強制ルート振り分けにする。更新系（変更・削除 等）は AI の intent 判定へ委譲。
+
+# 🚦 detectExplicitType: 「予定」／「タスク」を “登録系・削除系・完了系の動詞” とセットで書いたときだけ強制ルート振り分けする
 def detectExplicitType(user_message: str):
     """
     ● user_message に含まれる単語をみて
-        'schedule' : Google Calendar で「登録」ルートへ直行
-        'task'     : Google Tasks で「登録」ルートへ直行
+        'schedule' : Google Calendar の「登録」ルートへ直行
+        'task'     : Google Tasks の「登録／削除／完了」ルートへ直行
         None       : 明示でないので classifyIntent() に任せる
 
-    ＊ポイント＊
-      - “登録” を意味する動詞だけをトリガーにする
-      - 「変更」「削除」「完了」などは update / delete ブロックで処理する
+    ＊トリガー条件＊
+      - 予定 or タスク + 登録系動詞
+      - タスク + 削除 or 完了系動詞
+      - ただし「完了したタスク一覧を教えて」などは intent 推論へ回す
     """
-    # 登録だけを示す動詞セット（変更・削除は除外）
-    register_verbs = ["入れて", "追加", "登録"]
 
-    # --- 「予定」＋登録系動詞 → schedule ルート -------------------------
-    if "予定" in user_message and "タスク" not in user_message:
-        if any(v in user_message for v in register_verbs):
-            return "schedule"        # 📌 カレンダー登録処理へ
+    # 登録・削除・完了のキーワードを定義
+    register_verbs  = ["入れて", "追加", "登録", "作成"]
+    delete_verbs    = ["削除", "削除して", "消して", "消す", "消去"]
+    complete_verbs  = ["完了", "完了して", "終わらせ", "終わった", "終了"]
+    # ★ 「一覧要求」を示す語（完了一覧やタスクリスト要求を強制判定しないため）
+    list_keywords   = ["一覧", "教えて", "確認", "リスト"]
 
-    # --- 「タスク」＋登録系動詞 → task ルート ---------------------------
-    if "タスク" in user_message and "予定" not in user_message:
-        if any(v in user_message for v in register_verbs):
-            return "task"            # 📌 Tasks 登録処理へ
+    # --- 予定登録 --------------------------------------------------
+    if "予定" in user_message and any(v in user_message for v in register_verbs):
+        print("✅ detectExplicitType: 予定＋登録動詞 → 'schedule' を返します")
+        return "schedule"
 
-    # --- それ以外（変更・削除・参照 等）は AI に委譲 ---------------------
+    # --- タスク登録 ------------------------------------------------
+    if "タスク" in user_message and any(v in user_message for v in register_verbs):
+        print("✅ detectExplicitType: タスク＋登録動詞 → 'task' を返します")
+        return "task"
+
+    # --- タスク削除 ------------------------------------------------
+    if any(v in user_message for v in delete_verbs):
+        # 「タスク」明示 もしくは 「〜を削除/消して」が入っていれば削除
+        if "タスク" in user_message or "を削除" in user_message or "を消して" in user_message:
+            print("✅ detectExplicitType: タスク削除と判定 → 'task' を返します")
+            return "task"
+
+    # --- タスク完了 ------------------------------------------------
+    if any(v in user_message for v in complete_verbs):
+        # ▽ 一覧を求めている時は intent 推論（task_list_completed 等）に委譲
+        if any(k in user_message for k in list_keywords):
+            print("ℹ️ detectExplicitType: 完了一覧要求 → None を返し intent 推論へ")
+            return None
+        # 通常の完了指示
+        if "タスク" in user_message or "を完了" in user_message:
+            print("✅ detectExplicitType: タスク完了と判定 → 'task' を返します")
+            return "task"
+
+    # --- ここまで該当なし → intent 推論へ ------------------------
+    print("ℹ️ detectExplicitType: 判定できず None を返します（AI判定へ委譲）")
     return None
 
 # 🔍 ユーザーの発言から意図を判定（登録・更新・削除・予定確認など）
@@ -141,7 +167,9 @@ def extractNewEventDetails(user_input, require_time=True):
     else:
         return {"title": title}
 
-# 📤 ChatGPTを使ってタスク名を抽出する（余計な語句は除去）
+# タスク関連の動詞（削除や完了など）を除去する正規表現
+_PAT_TAIL = re.compile(r"(タスク)?(を)?(削除|消す|完了)(する|して)?$")
+
 def extractTaskTitle(user_input):
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -174,7 +202,10 @@ def extractTaskTitle(user_input):
 
     title = parsed.get("title", "").strip()
 
-    # ✅ 正規化：削除・完了などの余計な語句を取り除く
+    # ✅ 正規化：削除・完了などの余計な語句を取り除く（正規表現を使用）
+    title = re.sub(_PAT_TAIL, "", title).strip()
+
+    # 不要な語句（追加や変更など）を手動で除去
     for junk in [
         "を削除", "を登録", "を追加", "を変更", "を完了にする", "を完了にして",
         "を完了", "を実行", "してください", "して"
@@ -248,28 +279,20 @@ def extractTaskDetails(user_input):
     return {"title": title, "due": due}
 
 # 🎯 メイン処理：ユーザーの意図に応じて処理分岐し、結果を返す
-def askChatgpt(user_message):
+def askChatgpt(user_message, forced_type=None):
     try:
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
+        
         # 🚩 明示ルールを優先して処理
         explicit_type = detectExplicitType(user_message)
+        
+        # schedule と task の処理を共通化
         if explicit_type == "schedule":
-            new_event = extractNewEventDetails(user_message, require_time=True)
-            title = new_event["title"]
-            start_time = datetime.strptime(new_event["start_time"], "%Y-%m-%d %H:%M:%S")
-            return registerSchedule(title, start_time)
-
+            return handleSchedule(user_message)
         elif explicit_type == "task":
-            task_info = extractTaskDetails(user_message)
-            title = task_info.get("title")
-            due = task_info.get("due")
-            if due:
-                return registerTaskWithDue(title, due)
-            else:
-                return registerTask(title)
+            return handleTask(user_message)
 
-        # 明示がない場合 → 従来の intent 判定へ
+        # intent判定による追加処理
         intent = classifyIntent(user_message)
         print(f"🎯 intent 判定: {intent}")
 
@@ -277,232 +300,81 @@ def askChatgpt(user_message):
             day_offset = int(intent.split("+")[1])
             return getScheduleByOffset(day_offset)
 
-        elif intent == "register":
-            try:
-                task_info = extractTaskDetails(user_message)
-                title = task_info.get("title")
-                due = task_info.get("due")
-                if due or (title and ("タスク" in title or "やること" in title)):
-                    if not title:
-                        return "タスク名がうまく抽出できませんでした。"
-                    if due:
-                        return registerTaskWithDue(title, due)
-                    else:
-                        return registerTask(title)
-                else:
-                    return registerScheduleFromText(user_message, client)
-            except Exception as e:
-                print("❌ 登録エラー（タスク/予定）：", e)
-                return "登録中にエラーが発生しました。"
+        # 以下は意図に基づく処理を一つの関数でまとめる
+        if intent in ["task_register", "task_list", "task_complete", "task_delete", "task_list_completed", "task_list_due"]:
+            return handleTaskActions(intent, user_message)
 
-        elif intent == "delete":
-            new_event = extractNewEventDetails(user_message, require_time=True)
-            title = new_event.get("title")
-            start_time_raw = new_event.get("start_time")
-            if not title or not start_time_raw:
-                return "削除対象の予定が正しく抽出できませんでした。"
-            start_time = datetime.strptime(start_time_raw, "%Y-%m-%d %H:%M:%S")
-            return deleteEvent(title, start_time)
+        return "意図が不明です。再度入力してください。"
 
-        elif intent == "update":
-            # ChatGPT からは “新しい” 開始時刻しか取れない前提で処理
-            new_event = extractNewEventDetails(user_message, require_time=True)
-            title     = new_event["title"]
-            new_start = datetime.strptime(new_event["start_time"], "%Y-%m-%d %H:%M:%S")
+    except Exception as error:
+        print("❌ ChatGPT応答全体エラー：", error)
+        return "申し訳ありません。システムエラーが発生しました。後ほど再度お試しください。"
 
-            # 旧開始時刻を渡さず、タイトル一致イベントを全削除 → 再登録
-            return updateEvent(
-                title,
-                {
-                    "title":      title,
-                    "start_time": new_start
-                    # old_start_time は送らない
-                }
-            )
+def handleSchedule(user_message):
+    new_event = extractNewEventDetails(user_message, require_time=True)
+    title = new_event["title"]
+    start_time = datetime.strptime(new_event["start_time"], "%Y-%m-%d %H:%M:%S")
+    return registerSchedule(title, start_time)
 
-        elif intent == "task_register":
-            new_task = extractTaskTitle(user_message)
-            title = new_task.get("title")
-            if not title:
-                return "タスク名がうまく抽出できませんでした。"
-            return registerTask(title)
+def handleTask(user_message):
+    # 動詞セット（detectExplicitType と揃える）
+    delete_verbs = ["削除", "削除して", "消して", "消す", "消去"]
+    complete_verbs = ["完了", "完了して", "終わらせ", "終わった", "終了"]
 
-        elif intent == "task_list":
-            return listTasks()
+    # 1) 削除指示なら deleteTask
+    if any(v in user_message for v in delete_verbs):
+        title = extractTaskTitle(user_message).get("title")
+        return deleteTask(title)
 
-        elif intent == "task_complete":
-            new_task = extractTaskTitle(user_message)
-            title = new_task.get("title")
-            if not title:
-                return "完了させたいタスク名が見つかりませんでした。"
-            return completeTask(title)
+    # 2) 完了指示なら completeTask
+    if any(v in user_message for v in complete_verbs):
+        title = extractTaskTitle(user_message).get("title")
+        return completeTask(title)
 
-        elif intent == "task_delete":
-            new_task = extractTaskTitle(user_message)
-            title = new_task.get("title")
-            if not title:
-                return "削除したいタスク名が見つかりませんでした。"
-            return deleteTask(title)
+    # 3) それ以外は登録（期限付きなら WithDue）
+    task_info = extractTaskDetails(user_message)
+    title, due = task_info["title"], task_info["due"]
+    return registerTaskWithDue(title, due) if due else registerTask(title)
 
-        elif intent == "task_list_completed":
-            return listCompletedTasks()
+def handleTaskActions(intent, user_message):
+    if intent == "task_register":
+        title = extractTaskTitle(user_message).get("title")
+        return registerTask(title) if title else "タスク名が抽出できませんでした。"
 
-        elif intent == "task_list_due":
-            return listTasksWithDue()
+    elif intent == "task_list":
+        return listTasks()
+
+    elif intent == "task_complete":
+        title = extractTaskTitle(user_message).get("title")
+        return completeTask(title) if title else "完了させたいタスク名が見つかりませんでした。"
+
+    elif intent == "task_delete":
+        title = extractTaskTitle(user_message).get("title")
+        return deleteTask(title) if title else "削除したいタスク名が見つかりませんでした。"
+
+    elif intent == "task_list_completed":
+        return listCompletedTasks()
+
+    elif intent == "task_list_due":
+        return listTasksWithDue()
+
+        # 🤖 雑談や意図不明系はChatGPTへフォールバック
+        # ✅ ここで forced_type による補強プロンプトを追加
+        system_prompt = "あなたは親切で柔軟なAIアシスタントです。"
+
+        if forced_type == "task":
+            system_prompt += "\nこれはGoogle Tasksに関する命令です。恋愛やプロポーズなどとは関係ありません。"
+        elif forced_type == "schedule":
+            system_prompt += "\nこれはGoogle Calendarに関する命令です。"
 
         messages = [
-            {"role": "system", "content": "あなたは親切で柔軟なAIアシスタントです。"},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message}
         ]
+
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=messages
         )
         return response.choices[0].message.content
-
-    except Exception as error:
-        print("❌ ChatGPT応答全体エラー：", error)
-        return "AI応答中にエラーが発生しました。"
-
-        # 📆 特定日の予定確認（今日・明日・明後日など）
-        if intent.startswith("schedule+"):
-            day_offset = int(intent.split("+")[1])
-            return getScheduleByOffset(day_offset)
-
-        # 📝 新規登録（予定 or タスクの自動判別）
-        elif intent == "register":
-            try:
-                task_info = extractTaskDetails(user_message)
-                title = task_info.get("title")
-                due = task_info.get("due")
-
-                # ✅ 修正ポイント：括弧を見直し、title が None なら予定扱い
-                if due or (title and ("タスク" in title or "やること" in title)):
-                    if not title:
-                        return "タスク名がうまく抽出できませんでした。"
-                    if due:
-                        return registerTaskWithDue(title, due)
-                    else:
-                        return registerTask(title)
-                else:
-                    return registerScheduleFromText(user_message, client)
-
-            except Exception as e:
-                print("❌ 登録エラー（タスク/予定）：", e)
-                return "登録中にエラーが発生しました。"
-
-        # 🗑️ 予定の削除（タイトル＋開始時刻を厳密に抽出して削除）
-        elif intent == "delete":
-            try:
-                new_event = extractNewEventDetails(user_message, require_time=True)
-                title = new_event.get("title")
-                start_time_raw = new_event.get("start_time")
-
-                if not title or not start_time_raw:
-                    return "削除対象の予定が正しく抽出できませんでした。予定名と時間を明記してください。"
-
-                start_time = datetime.strptime(start_time_raw, "%Y-%m-%d %H:%M:%S")
-                return deleteEvent(title, start_time)
-
-            except Exception as e:
-                print("❌ 削除エラー：", e)
-                return "削除中にエラーが発生しました。"
-
-        # ♻️ 予定の更新（旧予定を削除 → 新予定を登録）
-        elif intent == "update":
-            try:
-                new_event = extractNewEventDetails(user_message, require_time=True)
-                title = new_event.get("title")
-                start_time_raw = new_event.get("start_time")
-
-                if not title or not start_time_raw:
-                    return "更新対象の予定が正しく抽出できませんでした。予定名と時間を明記してください。"
-
-                start_time = datetime.strptime(start_time_raw, "%Y-%m-%d %H:%M:%S")
-                return updateEvent(title, {"title": title, "start_time": start_time})
-            except Exception as e:
-                print("❌ 更新エラー：", e)
-                return "更新中にエラーが発生しました。"
-
-        # ✅ タスク登録
-        elif intent == "task_register":
-            try:
-                new_task = extractTaskTitle(user_message)
-                title = new_task.get("title")
-                if not title:
-                    return "タスク名がうまく抽出できませんでした。"
-                return registerTask(title)
-            except Exception as e:
-                print("❌ タスク登録エラー：", e)
-                return "タスク登録中にエラーが発生しました。"
-
-        # 📋 タスク一覧表示
-        elif intent == "task_list":
-            return listTasks()
-
-        # ✅ タスク完了処理
-        elif intent == "task_complete":
-            try:
-                new_task = extractTaskTitle(user_message)
-                title = new_task.get("title")
-                if not title:
-                    return "完了させたいタスク名が見つかりませんでした。"
-                return completeTask(title)
-            except Exception as e:
-                print("❌ タスク完了エラー：", e)
-                return "タスク完了中にエラーが発生しました。"
-            
-        # 🗑️ タスク削除
-        elif intent == "task_delete":
-            try:
-                new_task = extractTaskTitle(user_message)
-                title = new_task.get("title")
-                if not title:
-                    return "削除したいタスク名が見つかりませんでした。"
-                return deleteTask(title)
-            except Exception as e:
-                print("❌ タスク削除エラー：", e)
-                return "タスク削除中にエラーが発生しました。"
-            
-        # 完了済みタスク一覧
-        elif intent == "task_list_completed":
-            return listCompletedTasks()
-
-        # ✅ タスク登録（期限付きも含む）
-        elif intent == "task_register":
-            try:
-                task_info = extractTaskDetails(user_message)
-                title = task_info.get("title")
-                due = task_info.get("due")
-
-                if not title:
-                    return "タスク名がうまく抽出できませんでした。"
-
-                if due:
-                    return registerTaskWithDue(title, due)
-                else:
-                    return registerTask(title)
-
-            except Exception as e:
-                print("❌ タスク登録エラー：", e)
-                return "タスク登録中にエラーが発生しました。"
-            
-        # 📅 期限付きタスクの一覧表示
-        elif intent == "task_list_due":
-            return listTasksWithDue()
-
-        # 🤖 雑談など（ChatGPTへそのまま転送）
-        messages = [
-            {"role": "system", "content": "あなたは親切で柔軟なAIアシスタントです。"},
-            {"role": "user", "content": user_message}
-        ]
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages
-        )
-        return response.choices[0].message.content
-
-    except Exception as error:
-        print("❌ ChatGPT応答全体エラー：", error)
-        return "AI応答中にエラーが発生しました。"
 
