@@ -377,4 +377,3 @@ def handleTaskActions(intent, user_message):
             messages=messages
         )
         return response.choices[0].message.content
-
