@@ -18,6 +18,34 @@ from logic.task_utils import (
     registerTaskWithDue,
     listTasksWithDue
 )
+# 🚦 detectExplicitType: 「予定」／「タスク」を “登録系の動詞” とセットで書いたときだけ
+#   強制ルート振り分けにする。更新系（変更・削除 等）は AI の intent 判定へ委譲。
+def detectExplicitType(user_message: str):
+    """
+    ● user_message に含まれる単語をみて
+        'schedule' : Google Calendar で「登録」ルートへ直行
+        'task'     : Google Tasks で「登録」ルートへ直行
+        None       : 明示でないので classifyIntent() に任せる
+
+    ＊ポイント＊
+      - “登録” を意味する動詞だけをトリガーにする
+      - 「変更」「削除」「完了」などは update / delete ブロックで処理する
+    """
+    # 登録だけを示す動詞セット（変更・削除は除外）
+    register_verbs = ["入れて", "追加", "登録"]
+
+    # --- 「予定」＋登録系動詞 → schedule ルート -------------------------
+    if "予定" in user_message and "タスク" not in user_message:
+        if any(v in user_message for v in register_verbs):
+            return "schedule"        # 📌 カレンダー登録処理へ
+
+    # --- 「タスク」＋登録系動詞 → task ルート ---------------------------
+    if "タスク" in user_message and "予定" not in user_message:
+        if any(v in user_message for v in register_verbs):
+            return "task"            # 📌 Tasks 登録処理へ
+
+    # --- それ以外（変更・削除・参照 等）は AI に委譲 ---------------------
+    return None
 
 # 🔍 ユーザーの発言から意図を判定（登録・更新・削除・予定確認など）
 def classifyIntent(user_input):
@@ -223,8 +251,118 @@ def extractTaskDetails(user_input):
 def askChatgpt(user_message):
     try:
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+        # 🚩 明示ルールを優先して処理
+        explicit_type = detectExplicitType(user_message)
+        if explicit_type == "schedule":
+            new_event = extractNewEventDetails(user_message, require_time=True)
+            title = new_event["title"]
+            start_time = datetime.strptime(new_event["start_time"], "%Y-%m-%d %H:%M:%S")
+            return registerSchedule(title, start_time)
+
+        elif explicit_type == "task":
+            task_info = extractTaskDetails(user_message)
+            title = task_info.get("title")
+            due = task_info.get("due")
+            if due:
+                return registerTaskWithDue(title, due)
+            else:
+                return registerTask(title)
+
+        # 明示がない場合 → 従来の intent 判定へ
         intent = classifyIntent(user_message)
         print(f"🎯 intent 判定: {intent}")
+
+        if intent.startswith("schedule+"):
+            day_offset = int(intent.split("+")[1])
+            return getScheduleByOffset(day_offset)
+
+        elif intent == "register":
+            try:
+                task_info = extractTaskDetails(user_message)
+                title = task_info.get("title")
+                due = task_info.get("due")
+                if due or (title and ("タスク" in title or "やること" in title)):
+                    if not title:
+                        return "タスク名がうまく抽出できませんでした。"
+                    if due:
+                        return registerTaskWithDue(title, due)
+                    else:
+                        return registerTask(title)
+                else:
+                    return registerScheduleFromText(user_message, client)
+            except Exception as e:
+                print("❌ 登録エラー（タスク/予定）：", e)
+                return "登録中にエラーが発生しました。"
+
+        elif intent == "delete":
+            new_event = extractNewEventDetails(user_message, require_time=True)
+            title = new_event.get("title")
+            start_time_raw = new_event.get("start_time")
+            if not title or not start_time_raw:
+                return "削除対象の予定が正しく抽出できませんでした。"
+            start_time = datetime.strptime(start_time_raw, "%Y-%m-%d %H:%M:%S")
+            return deleteEvent(title, start_time)
+
+        elif intent == "update":
+            # ChatGPT からは “新しい” 開始時刻しか取れない前提で処理
+            new_event = extractNewEventDetails(user_message, require_time=True)
+            title     = new_event["title"]
+            new_start = datetime.strptime(new_event["start_time"], "%Y-%m-%d %H:%M:%S")
+
+            # 旧開始時刻を渡さず、タイトル一致イベントを全削除 → 再登録
+            return updateEvent(
+                title,
+                {
+                    "title":      title,
+                    "start_time": new_start
+                    # old_start_time は送らない
+                }
+            )
+
+        elif intent == "task_register":
+            new_task = extractTaskTitle(user_message)
+            title = new_task.get("title")
+            if not title:
+                return "タスク名がうまく抽出できませんでした。"
+            return registerTask(title)
+
+        elif intent == "task_list":
+            return listTasks()
+
+        elif intent == "task_complete":
+            new_task = extractTaskTitle(user_message)
+            title = new_task.get("title")
+            if not title:
+                return "完了させたいタスク名が見つかりませんでした。"
+            return completeTask(title)
+
+        elif intent == "task_delete":
+            new_task = extractTaskTitle(user_message)
+            title = new_task.get("title")
+            if not title:
+                return "削除したいタスク名が見つかりませんでした。"
+            return deleteTask(title)
+
+        elif intent == "task_list_completed":
+            return listCompletedTasks()
+
+        elif intent == "task_list_due":
+            return listTasksWithDue()
+
+        messages = [
+            {"role": "system", "content": "あなたは親切で柔軟なAIアシスタントです。"},
+            {"role": "user", "content": user_message}
+        ]
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=messages
+        )
+        return response.choices[0].message.content
+
+    except Exception as error:
+        print("❌ ChatGPT応答全体エラー：", error)
+        return "AI応答中にエラーが発生しました。"
 
         # 📆 特定日の予定確認（今日・明日・明後日など）
         if intent.startswith("schedule+"):
