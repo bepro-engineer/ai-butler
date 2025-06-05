@@ -6,26 +6,38 @@ from google.oauth2 import service_account
 from dateutil.parser import parse
 
 # 🔐 Google API認証情報を取得
-def getCredentials():
-    credentials_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-    if not credentials_path:
-        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON が未設定です")
-
-    credentials = service_account.Credentials.from_service_account_file(
-        credentials_path,
-        scopes=["https://www.googleapis.com/auth/calendar"]
-    )
-    return credentials
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 
 # 📅 Googleカレンダーに予定を登録（30分間の固定枠）
 from pytz import timezone
 
+def getCredentials():
+    token_path = os.getenv("GOOGLE_TOKEN_JSON") or "/home/bepro/projects/ai_butler/token.json"
+    if not token_path:
+        raise ValueError("GOOGLE_TOKEN_JSON が未設定です")
+
+    creds = Credentials.from_authorized_user_file(
+        token_path,
+        scopes=["https://www.googleapis.com/auth/calendar"]
+    )
+
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        with open(token_path, "w") as token_file:
+            token_file.write(creds.to_json())
+
+    print("✅ GOOGLE_TOKEN_JSON:", token_path)
+    return creds
+
+# 📅 Googleカレンダーに予定を登録する関数  
+#    └─ 同時間・同タイトルのイベントがあるとき “だけ” 登録を中止する安全版
 def registerSchedule(title, start_time):
     try:
         credentials = getCredentials()
         service = build("calendar", "v3", credentials=credentials)
 
-        # JSTタイムゾーン付与
+        # --- JST にそろえ、30分枠を計算 -----------------------------------
         jst = timezone("Asia/Tokyo")
         if start_time.tzinfo is None:
             start_time = jst.localize(start_time)
@@ -35,7 +47,7 @@ def registerSchedule(title, start_time):
         if not calendar_id:
             raise ValueError("GOOGLE_CALENDAR_ID が未設定です")
 
-        # 🔍 重複チェック：同時間帯に予定があるか確認
+        # --- 同時間帯イベント取得（30分幅） -------------------------------
         events_result = service.events().list(
             calendarId=calendar_id,
             timeMin=start_time.isoformat(),
@@ -43,24 +55,27 @@ def registerSchedule(title, start_time):
             singleEvents=True,
             orderBy="startTime"
         ).execute()
-
         events = events_result.get("items", [])
-        if events:
-            print("⚠️ 同時間帯に既に予定があります")
-            return "その時間にはすでに予定が登録されています。別の時間を指定してください。"
 
-        # ✅ 登録処理
-        event = {
+        # ★ タイトルも比較して完全重複だけブロック ------------------------
+        for ev in events:
+            if ev.get("summary") == title:
+                print("⚠️ 同タイトル・同時間の予定が既にあります")
+                return "その時間には同じ予定が既にあります。別の時間を指定してください。"
+
+        # --- 重複なし → 登録 ----------------------------------------------
+        event_body = {
             "summary": title,
             "start": {"dateTime": start_time.isoformat(), "timeZone": "Asia/Tokyo"},
-            "end": {"dateTime": end_time.isoformat(), "timeZone": "Asia/Tokyo"}
+            "end":   {"dateTime": end_time.isoformat(),   "timeZone": "Asia/Tokyo"}
         }
-
-        created = service.events().insert(calendarId=calendar_id, body=event).execute()
+        created = service.events().insert(calendarId=calendar_id, body=event_body).execute()
         print("✅ 登録イベント情報：", created)
+
         return f"予定『{title}』を登録しました。"
 
     except Exception as error:
+        # --- エラー時ログ＆ユーザー向け文言 -------------------------------
         print("❌ 登録エラー：", error)
         return "予定の登録中にエラーが発生しました。"
 
@@ -156,65 +171,59 @@ def deleteEvent(event_name, start_time):
         print("❌ 削除エラー：", error)
         return "予定削除中にエラーが発生しました。"
 
-# 🔁 旧予定を削除した上で、新しい内容で再登録する更新処理（重複チェックなし）
+# 🔁 旧予定をすべて削除してから新しい内容で再登録する更新処理（タイトルゆらぎ対策）
 def updateEvent(event_name, new_event):
     try:
-        # 認証とサービス初期化
         credentials = getCredentials()
         service = build("calendar", "v3", credentials=credentials)
 
-        jst = pytz.timezone("Asia/Tokyo")
-        now = datetime.now(jst)
-        past = now - timedelta(days=30)
-        future = now + timedelta(days=30)
+        jst   = pytz.timezone("Asia/Tokyo")
+        now   = datetime.now(jst)
+        past  = now - timedelta(days=30)
+        future= now + timedelta(days=30)
 
         calendar_id = os.getenv("GOOGLE_CALENDAR_ID")
         if not calendar_id:
             raise ValueError("GOOGLE_CALENDAR_ID が未設定です")
 
-        # 🔍 過去30日〜未来30日から「タイトル一致の予定」を検索
-        events_result = service.events().list(
+        # --- タイトル正規化関数（「歯医者」「歯医者の予定」→ 同一視） ----------
+        def _normalize(t: str) -> str:
+            for junk in ("の予定", "の予約", "予約"):
+                t = t.replace(junk, "")
+            return t.strip()
+
+        # --- 30 日幅でタイトル一致候補を取得 -------------------------------
+        events = service.events().list(
             calendarId=calendar_id,
             timeMin=past.isoformat(),
             timeMax=future.isoformat(),
             singleEvents=True,
             orderBy="startTime"
-        ).execute()
+        ).execute().get("items", [])
 
-        events = events_result.get("items", [])
-        deleted = False
+        # --- 正規化タイトルが一致する旧予定を“全部”削除 --------------------
+        deleted_any = False
+        for ev in events:
+            if _normalize(ev.get("summary", "")) == _normalize(event_name):
+                service.events().delete(calendarId=calendar_id,
+                                        eventId=ev["id"]).execute()
+                print("🗑️ 削除：", ev["summary"], ev["start"].get("dateTime"))
+                deleted_any = True   # break しない＝同タイトル複数も全削除
 
-        # 🔥 最初に見つけた「予定名一致」の予定を削除（旧予定）
-        for event in events:
-            if event.get("summary") == event_name:
-                service.events().delete(
-                    calendarId=calendar_id,
-                    eventId=event["id"]
-                ).execute()
-                print("✅ 旧予定を削除：", event_name)
-                deleted = True
-                break  # 複数一致しても一件だけ更新する方針
-
-        if not deleted:
+        if not deleted_any:
             return f"予定『{event_name}』は見つかりませんでした。"
 
-        # ✅ 新しい予定を直接登録（重複チェックせず）
-        new_title = new_event["title"]
+        # --- 新しい予定を登録 ---------------------------------------------
+        new_title      = new_event["title"]
         new_start_time = new_event["start_time"]
         if new_start_time.tzinfo is None:
             new_start_time = jst.localize(new_start_time)
-        new_end_time = new_start_time + timedelta(minutes=30)
+        new_end_time   = new_start_time + timedelta(minutes=30)
 
         event_body = {
             "summary": new_title,
-            "start": {
-                "dateTime": new_start_time.isoformat(),
-                "timeZone": "Asia/Tokyo"
-            },
-            "end": {
-                "dateTime": new_end_time.isoformat(),
-                "timeZone": "Asia/Tokyo"
-            }
+            "start": {"dateTime": new_start_time.isoformat(), "timeZone": "Asia/Tokyo"},
+            "end":   {"dateTime": new_end_time.isoformat(),   "timeZone": "Asia/Tokyo"}
         }
 
         created = service.events().insert(

@@ -8,7 +8,7 @@ SCOPES = [
 flow = InstalledAppFlow.from_client_secrets_file(
     "client_secret.json",
     scopes=SCOPES,
-    redirect_uri='urn:ietf:wg:oauth:2.0:oob'
+    redirect_uri='urn:ietf:wg:oauth:2.0:oob'  # 手動コピペ方式
 )
 
 auth_url, _ = flow.authorization_url(prompt='consent')
@@ -21,3 +21,4 @@ flow.fetch_token(code=code)
 
 with open("token.json", "w") as token:
     token.write(flow.credentials.to_json())
+

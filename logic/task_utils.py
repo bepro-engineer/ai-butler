@@ -29,14 +29,14 @@ def getCredentials():
     print("✅ GOOGLE_TOKEN_JSON:", token_path)
     return creds
 
-# ✅ 「geeksさんのリスト」のIDをリスト一覧から検索
+# ✅ 「マイタスク」のIDをリスト一覧から検索
 def getDefaultTasklistId(service):
     results = service.tasklists().list().execute()
     for item in results.get("items", []):
         print("🧩 リスト検出:", item["title"], "→", item["id"])
-        if item["title"].strip() == "geeksさんのリスト":
+        if item["title"].strip() == "マイタスク":
             return item["id"]
-    raise ValueError("『geeksさんのリスト』が見つかりませんでした。")
+    raise ValueError("『マイタスク』が見つかりませんでした。")
 
 # ✅ タスク登録処理（タイトルのみ登録）
 def registerTask(title):
