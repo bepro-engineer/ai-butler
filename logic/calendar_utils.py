@@ -237,4 +237,5 @@ def updateEvent(event_name, new_event):
     except Exception as error:
         print("❌ 更新エラー：", error)
         return f"更新中にエラーが発生しました：{error}"
+    
 

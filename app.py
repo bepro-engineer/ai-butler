@@ -18,8 +18,8 @@ configuration = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
 # Webhookエンドポイント
-@app.route("/callback", methods=["POST"])
-def callback():
+@app.route("/ai_butler_webhook", methods=["POST"])
+def ai_butler_webhook():
     line_signature = request.headers.get("X-Line-Signature", "")
     request_body = request.get_data(as_text=True)
     print("📦 Webhook受信ボディ：", request_body)
