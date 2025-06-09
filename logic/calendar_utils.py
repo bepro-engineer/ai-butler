@@ -115,14 +115,14 @@ def getScheduleByOffset(day_offset: int):
     return result
 
 # 🗑️ 予定を名前と時刻で削除（JSTベースの30日前〜30日後範囲）
-from dateutil.parser import parse  # 必須
-
 def deleteEvent(event_name, start_time):
     try:
         # ✅ タイトルを正規化
+        print(f"デバッグ: イベント名の正規化開始 - {event_name}")
         for junk in ["の予定", "の予約", "予約"]:
             event_name = event_name.replace(junk, "")
         event_name = event_name.strip()
+        print(f"デバッグ: 正規化後のイベント名 - {event_name}")
         
         credentials = getCredentials()
         service = build("calendar", "v3", credentials=credentials)
@@ -132,11 +132,16 @@ def deleteEvent(event_name, start_time):
         past = now - timedelta(days=30)
         future = now + timedelta(days=30)
 
+        print(f"デバッグ: 現在時刻 - {now}, 過去30日 - {past}, 未来30日 - {future}")
+
         # 🔍 文字列なら datetime に変換
         if isinstance(start_time, str):
+            print(f"デバッグ: 文字列からdatetimeに変換 - {start_time}")
             target_start = parse(start_time)
         else:
             target_start = start_time
+
+        print(f"デバッグ: 変換後のターゲット開始時刻 - {target_start}")
 
         events_result = service.events().list(
             calendarId=os.getenv("GOOGLE_CALENDAR_ID"),
@@ -146,6 +151,8 @@ def deleteEvent(event_name, start_time):
             orderBy="startTime"
         ).execute()
 
+        print(f"デバッグ: イベントリストの取得完了。取得件数: {len(events_result.get('items', []))}")
+
         for event in events_result.get("items", []):
             event_start_str = event["start"].get("dateTime")
             if not event_start_str:
@@ -153,10 +160,17 @@ def deleteEvent(event_name, start_time):
 
             event_start = parse(event_start_str)
 
-            # 🔁 厳密比較ではなく tz/microsec を除外して比較
-            if (event.get("summary") == event_name and
-                event_start.replace(tzinfo=None, microsecond=0) ==
-                target_start.replace(tzinfo=None, microsecond=0)):
+            # 🔁 時間の許容範囲を広げて比較
+            event_start_without_tz = event_start.replace(tzinfo=None, microsecond=0)
+            target_start_without_tz = target_start.replace(tzinfo=None, microsecond=0)
+
+            # デバッグ: イベントの開始時刻とターゲット時刻をログ出力
+            print(f"デバッグ: イベント開始時刻 - {event_start_without_tz}, ターゲット開始時刻 - {target_start_without_tz}")
+
+            # イベント名と時刻の一致をチェック
+            if (event.get("summary") == event_name and 
+                abs((event_start_without_tz - target_start_without_tz).total_seconds()) < 60):  # 1分以内の差を許容
+                print(f"デバッグ: 削除対象のイベントが見つかりました: {event_name}, 開始時刻 - {event_start}")
 
                 service.events().delete(
                     calendarId=os.getenv("GOOGLE_CALENDAR_ID"),
@@ -165,6 +179,7 @@ def deleteEvent(event_name, start_time):
                 print("✅ 削除成功：", event_name)
                 return f"予定『{event_name}』を削除しました。"
 
+        print(f"デバッグ: イベントが見つかりませんでした - {event_name}")
         return f"予定『{event_name}』は見つかりませんでした。"
 
     except Exception as error:

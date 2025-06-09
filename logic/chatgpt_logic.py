@@ -22,93 +22,96 @@ from logic.task_utils import (
 
 # 🚦 detectExplicitType: 「予定」／「タスク」を “登録系・削除系・完了系の動詞” とセットで書いたときだけ強制ルート振り分けする
 def detectExplicitType(user_message: str):
-    """
-    ● user_message に含まれる単語をみて
-        'schedule' : Google Calendar の「登録」ルートへ直行
-        'task'     : Google Tasks の「登録／削除／完了」ルートへ直行
-        None       : 明示でないので classifyIntent() に任せる
+    # 動詞を検出するリストを一度だけ定義
+    actions = {
+        'register': ["入れて", "追加", "登録", "作成"],
+        'delete': ["削除", "消して", "消す", "消去"],
+        'complete': ["完了", "終わらせ", "終わった", "終了"]
+    }
 
-    ＊トリガー条件＊
-      - 予定 or タスク + 登録系動詞
-      - タスク + 削除 or 完了系動詞
-      - ただし「完了したタスク一覧を教えて」などは intent 推論へ回す
-    """
-
-    # 登録・削除・完了のキーワードを定義
-    register_verbs  = ["入れて", "追加", "登録", "作成"]
-    delete_verbs    = ["削除", "削除して", "消して", "消す", "消去"]
-    complete_verbs  = ["完了", "完了して", "終わらせ", "終わった", "終了"]
-    # ★ 「一覧要求」を示す語（完了一覧やタスクリスト要求を強制判定しないため）
-    list_keywords   = ["一覧", "教えて", "確認", "リスト"]
-
-    # --- 予定登録 --------------------------------------------------
-    if "予定" in user_message and any(v in user_message for v in register_verbs):
-        print("✅ detectExplicitType: 予定＋登録動詞 → 'schedule' を返します")
-        return "schedule"
-
-    # --- タスク登録 ------------------------------------------------
-    if "タスク" in user_message and any(v in user_message for v in register_verbs):
-        print("✅ detectExplicitType: タスク＋登録動詞 → 'task' を返します")
-        return "task"
-
-    # --- タスク削除 ------------------------------------------------
+    # 削除動詞を最優先にチェック
+    delete_verbs = ["削除", "消して", "消す", "消去"]
     if any(v in user_message for v in delete_verbs):
-        # 「タスク」明示 もしくは 「〜を削除/消して」が入っていれば削除
-        if "タスク" in user_message or "を削除" in user_message or "を消して" in user_message:
+        if "予定" in user_message:
+            print("✅ detectExplicitType: 予定削除と判定 → 'schedule' を返します")
+            return "schedule"  # 予定削除と判定
+        elif "タスク" in user_message:
             print("✅ detectExplicitType: タスク削除と判定 → 'task' を返します")
-            return "task"
+            return "task"  # タスク削除と判定
 
-    # --- タスク完了 ------------------------------------------------
-    if any(v in user_message for v in complete_verbs):
-        # ▽ 一覧を求めている時は intent 推論（task_list_completed 等）に委譲
-        if any(k in user_message for k in list_keywords):
-            print("ℹ️ detectExplicitType: 完了一覧要求 → None を返し intent 推論へ")
-            return None
-        # 通常の完了指示
-        if "タスク" in user_message or "を完了" in user_message:
-            print("✅ detectExplicitType: タスク完了と判定 → 'task' を返します")
-            return "task"
+    # 次に登録系をチェック
+    register_verbs = ["入れて", "追加", "登録", "作成"]
+    if "予定" in user_message and any(v in user_message for v in register_verbs):
+        print("✅ detectExplicitType: 予定登録と判定 → 'schedule' を返します")
+        return "schedule"  # 予定登録と判定
+    elif "タスク" in user_message and any(v in user_message for v in register_verbs):
+        print("✅ detectExplicitType: タスク登録と判定 → 'task' を返します")
+        return "task"  # タスク登録と判定
 
-    # --- ここまで該当なし → intent 推論へ ------------------------
+    # 完了の判定
+    complete_verbs = ["完了", "終わらせ", "終わった", "終了"]
+    if "タスク" in user_message and any(v in user_message for v in complete_verbs):
+        print("✅ detectExplicitType: タスク完了と判定 → 'task' を返します")
+        return "task"  # タスク完了と判定
+
+    # それでも判定できない場合はAIに委譲
     print("ℹ️ detectExplicitType: 判定できず None を返します（AI判定へ委譲）")
     return None
 
 # 🔍 ユーザーの発言から意図を判定（登録・更新・削除・予定確認など）
 def classifyIntent(user_input):
     user_input = user_input.lower()
+    print(f"📩 ユーザーの入力: {user_input}")
 
     if "削除" in user_input:
-        return "delete"
+        print("✅ 意図判定: 削除を返します")
+        return "delete"  # 削除意図として返す
     elif "更新" in user_input or "変更" in user_input:
+        print("✅ 意図判定: 更新を返します")
         return "update"
     elif "完了済" in user_input or "完了した" in user_input:
+        print("✅ 意図判定: 完了したタスクのリストを返します")
         return "task_list_completed"
     elif "期限付き" in user_input or "締め切り" in user_input or "期日" in user_input:
+        print("✅ 意図判定: 期限付きタスクリストを返します")
         return "task_list_due"
     elif "入れて" in user_input or "登録" in user_input or "追加" in user_input:
+        print("✅ 意図判定: 登録を返します")
         return "register"
     elif "明後日" in user_input and "予定" in user_input:
+        print("✅ 意図判定: 明後日の予定を返します")
         return "schedule+2"
     elif "明日" in user_input and "予定" in user_input:
+        print("✅ 意図判定: 明日の予定を返します")
         return "schedule+1"
     elif "今日" in user_input and "予定" in user_input:
+        print("✅ 意図判定: 今日の予定を返します")
         return "schedule+0"
     elif "予定" in user_input or "スケジュール" in user_input:
+        print("✅ 意図判定: 予定に関する一般的なリクエストを返します")
         return "schedule+0"
     elif "天気" in user_input:
+        print("✅ 意図判定: 天気情報を返します")
         return "weather"
     elif "疲れた" in user_input or "やる気" in user_input:
+        print("✅ 意図判定: メンタルに関するリクエストを返します")
         return "mental"
     elif "タスク" in user_input or "やること" in user_input:
+        print("✅ 意図判定: タスク関連のリクエスト")
         if "一覧" in user_input or "確認" in user_input:
+            print("✅ 意図判定: タスク一覧を返します")
             return "task_list"
         elif "完了" in user_input:
+            print("✅ 意図判定: タスク完了を返します")
             return "task_complete"
         elif "削除" in user_input:
+            print("✅ 意図判定: タスク削除を返します")
             return "task_delete"
         else:
+            print("✅ 意図判定: タスク登録を返します")
             return "task_register"
     else:
+        print("✅ 意図判定: 一般的なリクエスト")
         return "general"
     
 # 📤 ChatGPTを使って予定のタイトルと（必要なら）開始時刻を抽出する
@@ -143,22 +146,34 @@ def extractNewEventDetails(user_input, require_time=True):
         messages=messages
     )
     content = response.choices[0].message.content
+    
+    # ChatGPTのレスポンス内容を表示
     print("📤 ChatGPTの返答（予定抽出）：", content)
 
     try:
         parsed = json.loads(content)
-    except json.JSONDecodeError:
-        print("❌ JSON解析失敗：ChatGPT応答が不正な形式")
+    except json.JSONDecodeError as e:
+        print("❌ JSON解析失敗：", e)  # エラー詳細を表示
         raise ValueError("ChatGPTの応答が正しい形式ではありません。")
+
+    # パース後の内容を確認
+    print("📤 パース後の内容：", parsed)  # parsedを表示
 
     # タイトルの正規化処理（ゆらぎ防止）
     title = parsed.get("title", "").strip()
+
+    # 不要な語句を取り除く
     for junk in [
         "の予定を変更", "の予定を削除", "の予定を追加", "の予定を登録",
         "を変更", "を削除", "を追加", "を登録",
-        "の予定", "の予約", "予約"
+        "の予定", "の予約", "予約", "予定", "を削除する", "の"
     ]:
         title = title.replace(junk, "")
+
+    # 正規化後のタイトルを表示
+    print(f"治ってるかチェック title（正規化後）={title}")
+
+    # タイトルの最適化処理
     title = title.strip()
 
     if require_time:
@@ -284,15 +299,20 @@ def askChatgpt(user_message, forced_type=None):
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         
         # 🚩 明示ルールを優先して処理
+        print("🚩 detectExplicitType 呼び出し前のユーザー入力:", user_message)
         explicit_type = detectExplicitType(user_message)
-        
+        print(f"🚩 explicit_type 判定結果: {explicit_type}")
+
         # schedule と task の処理を共通化
         if explicit_type == "schedule":
+            print("🚩 schedule 処理開始")
             return handleSchedule(user_message)
         elif explicit_type == "task":
+            print("🚩 task 処理開始")
             return handleTask(user_message)
 
         # intent判定による追加処理
+        print("🚩 classifyIntent 呼び出し前のユーザー入力:", user_message)
         intent = classifyIntent(user_message)
         print(f"🎯 intent 判定: {intent}")
 
@@ -314,6 +334,14 @@ def handleSchedule(user_message):
     new_event = extractNewEventDetails(user_message, require_time=True)
     title = new_event["title"]
     start_time = datetime.strptime(new_event["start_time"], "%Y-%m-%d %H:%M:%S")
+
+    # 「削除」が含まれていれば削除処理を呼び出す
+    if "削除" in user_message:
+        print(f"🚩 予定削除リクエスト：{title} の削除を実行")
+        return deleteEvent(title, start_time)  # 削除処理を呼び出す
+
+    # それ以外は予定登録処理
+    print(f"🚩 予定登録：{title} を登録します")
     return registerSchedule(title, start_time)
 
 def handleTask(user_message):
