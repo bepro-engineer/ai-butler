@@ -20,18 +20,22 @@ from logic.task_utils import (
     listTasksWithDue
 )
 
+# グローバルに actions を定義
+actions = {
+    'register': ["入れて", "追加", "登録", "作成"],
+    'delete': ["削除", "消して", "消す", "消去", "キャンセル"],
+    'complete': ["完了", "終わらせ", "終わった", "終了"],
+    'update': ["変更", "更新"]
+}
 # 🚦 detectExplicitType: 「予定」／「タスク」を “登録系・削除系・完了系の動詞” とセットで書いたときだけ強制ルート振り分けする
 def detectExplicitType(user_message: str):
-    # 動詞を検出するリストを一度だけ定義
-    actions = {
-        'register': ["入れて", "追加", "登録", "作成"],
-        'delete': ["削除", "消して", "消す", "消去"],
-        'complete': ["完了", "終わらせ", "終わった", "終了"]
-    }
+    # 予定変更の判定
+    if any(v in user_message for v in actions['update']) and "予定" in user_message:
+        print("✅ detectExplicitType: 予定変更と判定 → 'schedule' を返します")
+        return "schedule"  # 予定変更と判定
 
     # 削除動詞を最優先にチェック
-    delete_verbs = ["削除", "消して", "消す", "消去"]
-    if any(v in user_message for v in delete_verbs):
+    if any(v in user_message for v in actions['delete']):
         if "予定" in user_message:
             print("✅ detectExplicitType: 予定削除と判定 → 'schedule' を返します")
             return "schedule"  # 予定削除と判定
@@ -40,17 +44,15 @@ def detectExplicitType(user_message: str):
             return "task"  # タスク削除と判定
 
     # 次に登録系をチェック
-    register_verbs = ["入れて", "追加", "登録", "作成"]
-    if "予定" in user_message and any(v in user_message for v in register_verbs):
+    if "予定" in user_message and any(v in user_message for v in actions['register']):
         print("✅ detectExplicitType: 予定登録と判定 → 'schedule' を返します")
         return "schedule"  # 予定登録と判定
-    elif "タスク" in user_message and any(v in user_message for v in register_verbs):
+    elif "タスク" in user_message and any(v in user_message for v in actions['register']):
         print("✅ detectExplicitType: タスク登録と判定 → 'task' を返します")
         return "task"  # タスク登録と判定
 
     # 完了の判定
-    complete_verbs = ["完了", "終わらせ", "終わった", "終了"]
-    if "タスク" in user_message and any(v in user_message for v in complete_verbs):
+    if "タスク" in user_message and any(v in user_message for v in actions['complete']):
         print("✅ detectExplicitType: タスク完了と判定 → 'task' を返します")
         return "task"  # タスク完了と判定
 
@@ -335,11 +337,16 @@ def handleSchedule(user_message):
     title = new_event["title"]
     start_time = datetime.strptime(new_event["start_time"], "%Y-%m-%d %H:%M:%S")
 
-    # 「削除」が含まれていれば削除処理を呼び出す
-    if "削除" in user_message:
+    # 「削除」に関連する動詞が含まれていれば削除処理を呼び出す
+    if any(v in user_message for v in actions['delete']):
         print(f"🚩 予定削除リクエスト：{title} の削除を実行")
         return deleteEvent(title, start_time)  # 削除処理を呼び出す
-
+    
+    # 「変更」「更新」に関連する動詞が含まれていれば更新処理を呼び出す
+    elif any(v in user_message for v in actions['update']):
+        print(f"🚩 予定変更リクエスト：{title} の削除を実行")
+        return updateEvent(title, new_event)  # updateEvent 関数を呼び出して削除と再登録
+    
     # それ以外は予定登録処理
     print(f"🚩 予定登録：{title} を登録します")
     return registerSchedule(title, start_time)

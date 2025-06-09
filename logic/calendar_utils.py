@@ -229,16 +229,23 @@ def updateEvent(event_name, new_event):
             return f"予定『{event_name}』は見つかりませんでした。"
 
         # --- 新しい予定を登録 ---------------------------------------------
-        new_title      = new_event["title"]
+        new_title = new_event["title"]
         new_start_time = new_event["start_time"]
+
+        # もし new_start_time が文字列（str）なら、datetime に変換
+        if isinstance(new_start_time, str):
+            new_start_time = datetime.strptime(new_start_time, "%Y-%m-%d %H:%M:%S")
+
+        # タイムゾーンを付与
         if new_start_time.tzinfo is None:
-            new_start_time = jst.localize(new_start_time)
-        new_end_time   = new_start_time + timedelta(minutes=30)
+            new_start_time = jst.localize(new_start_time)  # タイムゾーンをローカライズ
+
+        new_end_time = new_start_time + timedelta(minutes=30)
 
         event_body = {
             "summary": new_title,
             "start": {"dateTime": new_start_time.isoformat(), "timeZone": "Asia/Tokyo"},
-            "end":   {"dateTime": new_end_time.isoformat(),   "timeZone": "Asia/Tokyo"}
+            "end": {"dateTime": new_end_time.isoformat(), "timeZone": "Asia/Tokyo"}
         }
 
         created = service.events().insert(
