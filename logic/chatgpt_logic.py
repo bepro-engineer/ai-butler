@@ -28,6 +28,9 @@ actions = {
     'update': ["変更", "更新"],
     'list': ["教えて", "見せて", "リスト", "タスク", "完了"]
 }
+#    list_verbs = ["教えて", "見せて", "リスト", "タスク", "完了"]
+#    complete_verbs = ["完了", "完了して", "終わらせ", "終わった", "終了"]
+
 # 🚦 detectExplicitType: 「予定」／「タスク」を “登録系・削除系・完了系の動詞” とセットで書いたときだけ強制ルート振り分けする
 def detectExplicitType(user_message: str):
     # 予定変更の判定
@@ -172,9 +175,6 @@ def extractNewEventDetails(user_input, require_time=True):
         "の予定", "の予約", "予約", "予定", "を削除する", "の"
     ]:
         title = title.replace(junk, "")
-
-    # 正規化後のタイトルを表示
-    print(f"治ってるかチェック title（正規化後）={title}")
 
     # タイトルの最適化処理
     title = title.strip()
@@ -334,36 +334,77 @@ def askChatgpt(user_message, forced_type=None):
         return "申し訳ありません。システムエラーが発生しました。後ほど再度お試しください。"
 
 def handleSchedule(user_message):
-    new_event = extractNewEventDetails(user_message, require_time=True)
-    title = new_event["title"]
-    start_time = datetime.strptime(new_event["start_time"], "%Y-%m-%d %H:%M:%S")
+    result_messages = []  # 結果を格納するリスト
+    list_verbs = ["教えて", "見せて", "リスト", "一蘭"]
 
-    # 「削除」に関連する動詞が含まれていれば削除処理を呼び出す
-    if any(v in user_message for v in actions['delete']):
-        print(f"🚩 予定削除リクエスト：{title} の削除を実行")
-        return deleteEvent(title, start_time)  # 削除処理を呼び出す
-    
-    # 「変更」「更新」に関連する動詞が含まれていれば更新処理を呼び出す
-    elif any(v in user_message for v in actions['update']):
-        print(f"🚩 予定変更リクエスト：{title} の削除を実行")
-        return updateEvent(title, new_event)  # updateEvent 関数を呼び出して削除と再登録
-    
-    # それ以外は予定登録処理
-    print(f"🚩 予定登録：{title} を登録します")
-    return registerSchedule(title, start_time)
+    # 予定表示リクエストの優先処理（先にこれを処理）
+    if any(v in user_message for v in list_verbs):
+        # 今日、明日、明後日の予定を表示するだけ
+        schedule_result = None  # 初期化
+
+        if "今日" in user_message:
+            print("🚩 今日の予定を表示する条件が実行されました。")
+            schedule_result = getScheduleByOffset(0)  # 今日の予定
+        elif "明日" in user_message:
+            print("🚩 明日の予定を表示する条件が実行されました。")
+            schedule_result = getScheduleByOffset(1)  # 明日の予定
+        elif "明後日" in user_message:
+            print("🚩 明後日の予定を表示する条件が実行されました。")
+            schedule_result = getScheduleByOffset(2)  # 明後日の予定
+
+        # 予定の型をチェックして処理
+        if isinstance(schedule_result, str):  # もし文字列が返された場合
+            result_messages.append(schedule_result)
+        elif isinstance(schedule_result, list):  # もしリストが返された場合
+            if schedule_result:  # 予定がある場合
+                result_messages.append("予定はこちらです：")
+                for event in schedule_result:
+                    result_messages.append(f"・{event['start_time']}：{event['title']}")
+            else:
+                result_messages.append("予定はありません。")
+        else:
+            result_messages.append("予定の取得に失敗しました。")
+
+    # 予定登録や削除、更新処理
+    else:
+        # 予定削除や更新、登録の処理
+        new_event = extractNewEventDetails(user_message, require_time=True)
+        title = new_event["title"]
+        start_time = datetime.strptime(new_event["start_time"], "%Y-%m-%d %H:%M:%S")
+
+        # 削除処理
+        if any(v in user_message for v in actions['delete']):
+            print(f"🚩 予定削除リクエスト：{title} の削除を実行")
+            delete_result = deleteEvent(title, start_time)  # 削除処理を呼び出す
+            result_messages.append(delete_result)
+        
+        # 更新処理
+        elif any(v in user_message for v in actions['update']):
+            print(f"🚩 予定変更リクエスト：{title} の更新を実行")
+            update_result = updateEvent(title, new_event)  # updateEvent 関数を呼び出して更新
+            result_messages.append(update_result)
+
+        # 予定登録処理
+        elif any(v in user_message for v in actions['register']):
+            print(f"🚩 予定登録：{title} を登録します")
+            register_result = registerSchedule(title, start_time)  # 予定登録
+            result_messages.append(register_result)
+
+        else:
+            result_messages.append("リクエストが理解できませんでした。")
+
+    # 結果を文字列として返す
+    return "\n".join(result_messages)
 
 def handleTask(user_message):
-    # 動詞セット（detectExplicitType と揃える）
-    delete_verbs = ["削除", "削除して", "消して", "消す", "消去"]
-    complete_verbs = ["完了", "完了して", "終わらせ", "終わった", "終了"]
 
     # 1) 削除指示なら deleteTask
-    if any(v in user_message for v in delete_verbs):
+    if any(v in user_message for v in actions['delete']):
         title = extractTaskTitle(user_message).get("title")
         return deleteTask(title)
 
     # 2) 完了指示なら completeTask
-    if any(v in user_message for v in complete_verbs):
+    if any(v in user_message for v in actions['complete']):
         title = extractTaskTitle(user_message).get("title")
         return completeTask(title)
 
