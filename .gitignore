@@ -10,3 +10,4 @@ token-geeks.json
 credentials.json
 client_secret.json
 .venv
+nohup.out
