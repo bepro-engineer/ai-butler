@@ -13,9 +13,10 @@ VPS環境（Ubuntu）での動作・GitHubクローン・環境構成が前提�
 -ユーザーが「明日の午後3時に通院」と入力すると、予定がGoogleカレンダーに自動登録されます
 -「明日の通院を削除して」と送れば、該当予定が削除されます
 -すべての処理は ChatGPTによる自然言語解析 → GoogleカレンダーAPI操作 によってリアルタイムで行われます
+（左イメージ：予定　右イメージ：タスク）
 
 <div align="center">
-  <img src="https://github.com/bepro-engineer/ai_butler/blob/main/images/ai_butler_screen.png" width="300">
+  <img src="https://github.com/bepro-engineer/ai_butler/blob/main/images/ai_butler_screen.png" width="600">
 </div>
 
 ```plaintext
