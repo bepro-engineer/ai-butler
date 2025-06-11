@@ -1,6 +1,6 @@
 # 🤖 AI執事 – GoogleカレンダーとLINEで予定管理を自動化
 <div align="center">
-<img src="https://raw.githubusercontent.com/bepro-engineer/ai-butler/main/images/butler_screen_top.png" width="700">
+<img src="https://github.com/bepro-engineer/ai_butler/blob/main/images/butler_screen_top.png" width="700">
 </div>
 
 # 🤖 AI執事（バトラー）– LINEに話すだけで予定が入る、未来の秘書
@@ -77,7 +77,7 @@ Googleカレンダーに「登録・削除・変更」までを自動処理す�
 - 右：予定の削除や変更
 
 <div align="center">
-<img src="https://raw.githubusercontent.com/bepro-engineer/ai-butler/main/images/butler_screen.png" width="600">
+<img src="https://github.com/bepro-engineer/ai_butler/blob/main/images/butler_screen.png" width="600">
 </div>
 
 ✍️ AI執事は、送るだけで完了します。  
