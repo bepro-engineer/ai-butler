@@ -96,12 +96,6 @@ def classifyIntent(user_input):
     elif "予定" in user_input or "スケジュール" in user_input:
         print("✅ 意図判定: 予定に関する一般的なリクエストを返します")
         return "schedule+0"
-    elif "天気" in user_input:
-        print("✅ 意図判定: 天気情報を返します")
-        return "weather"
-    elif "疲れた" in user_input or "やる気" in user_input:
-        print("✅ 意図判定: メンタルに関するリクエストを返します")
-        return "mental"
     elif "タスク" in user_input or "やること" in user_input:
         print("✅ 意図判定: タスク関連のリクエスト")
         if "一覧" in user_input or "確認" in user_input:
@@ -232,21 +226,6 @@ def extractTaskTitle(user_input):
 
     return {"title": title.strip()}
 
-# 🗓️ 予定登録用：ChatGPTで抽出 → 登録処理 → 成功メッセージ返却
-def registerScheduleFromText(user_message, client):
-    try:
-        new_event = extractNewEventDetails(user_message, require_time=True)
-        title = new_event["title"]
-        start_time = datetime.strptime(new_event["start_time"], "%Y-%m-%d %H:%M:%S")
-
-        # ✅ 結果メッセージをそのまま返す
-        result = registerSchedule(title, start_time)
-        return result
-
-    except Exception as error:
-        print("❌ 予定登録エラー：", error)
-        return "日付とタイトルの解析に失敗しました。"
-
 # 📥 タスクのタイトル＋期限（due）を抽出する
 def extractTaskDetails(user_input):
     today = datetime.now().strftime("%Y-%m-%d")
@@ -313,7 +292,10 @@ def askChatgpt(user_message, forced_type=None):
         elif explicit_type == "task":
             print("🚩 task 処理開始")
             return handleTask(user_message)
-
+        elif explicit_type == "general":
+            print("🚩 scheduleやtask以外の処理 処理開始")
+            return askFreeChat(user_message, client)
+        
         # intent判定による追加処理
         print("🚩 classifyIntent 呼び出し前のユーザー入力:", user_message)
         intent = classifyIntent(user_message)
@@ -325,7 +307,7 @@ def askChatgpt(user_message, forced_type=None):
 
         # 以下は意図に基づく処理を一つの関数でまとめる
         if intent in ["task_register", "task_list", "task_complete", "task_delete", "task_list_completed", "task_list_due"]:
-            return handleTaskActions(intent, user_message)
+            return handleTaskActions(intent, user_message, client)
 
         return "意図が不明です。再度入力してください。"
 
@@ -413,7 +395,7 @@ def handleTask(user_message):
     title, due = task_info["title"], task_info["due"]
     return registerTaskWithDue(title, due) if due else registerTask(title)
 
-def handleTaskActions(intent, user_message):
+def handleTaskActions(intent, user_message, client, forced_type=None):
     if intent == "task_register":
         title = extractTaskTitle(user_message).get("title")
         return registerTask(title) if title else "タスク名が抽出できませんでした。"
@@ -435,23 +417,37 @@ def handleTaskActions(intent, user_message):
     elif intent == "task_list_due":
         return listTasksWithDue()
 
-        # 🤖 雑談や意図不明系はChatGPTへフォールバック
-        # ✅ ここで forced_type による補強プロンプトを追加
-        system_prompt = "あなたは親切で柔軟なAIアシスタントです。"
+    # 🤖 雑談や意図不明系はChatGPTへフォールバック
+    # ✅ ここで forced_type による補強プロンプトを追加
+    system_prompt = "あなたは親切で柔軟なAIアシスタントです。"
 
-        if forced_type == "task":
-            system_prompt += "\nこれはGoogle Tasksに関する命令です。恋愛やプロポーズなどとは関係ありません。"
-        elif forced_type == "schedule":
-            system_prompt += "\nこれはGoogle Calendarに関する命令です。"
+    if forced_type == "task":
+        system_prompt += "\nこれはGoogle Tasksに関する命令です。恋愛やプロポーズなどとは関係ありません。"
+    elif forced_type == "schedule":
+        system_prompt += "\nこれはGoogle Calendarに関する命令です。"
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message}
-        ]
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message}
+    ]
 
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages
-        )
-        return response.choices[0].message.content
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=messages
+    )
+    return response.choices[0].message.content
     
+# 予定やタスク以外の処理
+def askFreeChat(user_message, client):
+    system_prompt = "あなたは親切で柔軟なAIアシスタントです。"
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message}
+    ]
+
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=messages
+    )
+    return response.choices[0].message.content
