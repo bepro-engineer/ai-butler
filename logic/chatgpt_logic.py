@@ -275,45 +275,62 @@ def extractTaskDetails(user_input):
 
     return {"title": title, "due": due}
 
-# 🎯 メイン処理：ユーザーの意図に応じて処理分岐し、結果を返す
+# 🎯 メイン処理：ユーザーの発言に応じて処理を振り分ける
 def askChatgpt(user_message, forced_type=None):
     try:
+        # OpenAIクライアントの初期化（複数関数で使うので先に生成）
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        
-        # 🚩 明示ルールを優先して処理
-        print("🚩 detectExplicitType 呼び出し前のユーザー入力:", user_message)
+
+        # ① 明示ルールに基づくタイプ判定（予定 or タスク or None）
         explicit_type = detectExplicitType(user_message)
         print(f"🚩 explicit_type 判定結果: {explicit_type}")
 
-        # schedule と task の処理を共通化
+        # ② 明示的に「予定」と判定されたら、予定処理へ（登録・削除・表示・更新）
         if explicit_type == "schedule":
             print("🚩 schedule 処理開始")
             return handleSchedule(user_message)
+
+        # ③ 明示的に「タスク」と判定された場合、intentでさらに詳細判定する
         elif explicit_type == "task":
-            print("🚩 task 処理開始")
+            print("🚩 task 処理開始（intentによる分岐）")
+            intent = classifyIntent(user_message)
+            print(f"🎯 intent 判定（タスク系）: {intent}")
+
+            # タスクの意図が明確に分類できた場合は handleTaskActions を使用
+            if intent in [
+                "task_register", "task_list", "task_complete",
+                "task_delete", "task_list_completed", "task_list_due"
+            ]:
+                return handleTaskActions(intent, user_message, client)
+
+            # 意図が曖昧な場合は旧式の handleTask() で処理
             return handleTask(user_message)
-        elif explicit_type == "general":
-            print("🚩 scheduleやtask以外の処理 処理開始")
-            return askFreeChat(user_message, client)
-        
-        # intent判定による追加処理
+
+        # ④ 明示的タイプでは判定できなかった場合 → intent を使って分岐
         print("🚩 classifyIntent 呼び出し前のユーザー入力:", user_message)
         intent = classifyIntent(user_message)
         print(f"🎯 intent 判定: {intent}")
 
+        # 「今日の予定」「明日の予定」などに対応（例: schedule+1）
         if intent.startswith("schedule+"):
             day_offset = int(intent.split("+")[1])
             return getScheduleByOffset(day_offset)
 
-        # 以下は意図に基づく処理を一つの関数でまとめる
-        if intent in ["task_register", "task_list", "task_complete", "task_delete", "task_list_completed", "task_list_due"]:
+        # intentが明確なタスク系であれば handleTaskActions を使って処理
+        if intent in [
+            "task_register", "task_list", "task_complete",
+            "task_delete", "task_list_completed", "task_list_due"
+        ]:
             return handleTaskActions(intent, user_message, client)
 
-        return "意図が不明です。再度入力してください。"
+        # ⑤ 意図不明または一般雑談系 → ChatGPT雑談応答へフォールバック
+        print("🚩 fallback → 雑談応答を実行します")
+        return askFreeChat(user_message, client)
 
     except Exception as error:
         print("❌ ChatGPT応答全体エラー：", error)
         return "申し訳ありません。システムエラーが発生しました。後ほど再度お試しください。"
+
 
 def handleSchedule(user_message):
     result_messages = []  # 結果を格納するリスト

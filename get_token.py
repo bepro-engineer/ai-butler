@@ -5,20 +5,29 @@ SCOPES = [
     "https://www.googleapis.com/auth/tasks"
 ]
 
-flow = InstalledAppFlow.from_client_secrets_file(
-    "client_secret.json",
-    scopes=SCOPES,
-    redirect_uri='urn:ietf:wg:oauth:2.0:oob'  # 手動コピペ方式
-)
+def main():
+    flow = InstalledAppFlow.from_client_secrets_file(
+        "client_secret.json",
+        scopes=SCOPES
+    )
 
-auth_url, _ = flow.authorization_url(prompt='consent')
+    # ✅ 明示的に redirect_uri を指定（これがないとGoogleが拒否）
+    flow.redirect_uri = 'urn:ietf:wg:oauth:2.0:oob'
 
-print("以下のURLをローカルPCのブラウザで開いてください：")
-print(auth_url)
+    # ✅ 認証URL生成（ここで redirect_uri が含まれるようになる）
+    auth_url, _ = flow.authorization_url(prompt='consent')
 
-code = input("認証後に表示されるコードをここに貼り付けてください: ")
-flow.fetch_token(code=code)
+    print("🔗 以下のURLをブラウザで開いて認証してください：")
+    print(auth_url)
 
-with open("token.json", "w") as token:
-    token.write(flow.credentials.to_json())
+    code = input("🔑 認証後に表示されるコードを貼り付けてください: ")
+    flow.fetch_token(code=code)
+
+    with open("token.json", "w") as token_file:
+        token_file.write(flow.credentials.to_json())
+
+    print("✅ token.json を保存しました（refresh_token 含む）")
+
+if __name__ == "__main__":
+    main()
 
