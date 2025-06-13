@@ -331,7 +331,6 @@ def askChatgpt(user_message, forced_type=None):
         print("❌ ChatGPT応答全体エラー：", error)
         return "申し訳ありません。システムエラーが発生しました。後ほど再度お試しください。"
 
-
 def handleSchedule(user_message):
     result_messages = []  # 結果を格納するリスト
     list_verbs = ["教えて", "見せて", "リスト", "一蘭"]
